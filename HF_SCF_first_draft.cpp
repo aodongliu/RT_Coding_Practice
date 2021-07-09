@@ -9,30 +9,51 @@
 #include "Eigen/Core"
 #include <map>
 
-// Define "Matrix" as a type. Solve problems using the Eigen package.
 typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> Matrix;
 using std::cout;
 using std::endl;
 using std::ifstream;
 using namespace std;
 
+
+void print_matrix(int row, int column, double** &matrix){
+    for(int i = 0; i < row; i++){
+        for(int j = 0; j < column; j++) {
+            printf("%16.13f ", matrix[i][j]);
+        }
+        cout  << "\n";
+    }
+    cout  << "\n";
+}
+
+// Converts a lower triangle matrix into a square matrix
+double** toSquare(int row, int column, double** &matrix){
+    for(int i = 0; i < row; i++){
+        for(int j = 0; j < column; j++){
+            matrix[i][j] = matrix[j][i];
+        }
+    }
+}
+
 // Parse the one electron integrals files, and return a square matrix
-Matrix readOneEFile(int nbasis, const char *filename) {
+double** getMatrixFromFile(int nbasis, const char *filename){
     FILE *data;
     data = fopen(filename, "r");
 
-    Matrix matrix(nbasis, nbasis);
+    double **matrix = new double* [nbasis];
+    for(int i=0; i < nbasis; i++)
+        matrix[i] = new double[nbasis];
 
-    int nline = nbasis * (nbasis + 1) / 2;
-    for (int i = 0; i < nline; i++) {
+    int nline = nbasis * (nbasis + 1) / 2 ;
+    for(int i=0; i < nline; i++) {
         int row;
         int column;
-
+        fscanf(data, "%d %d", &row,  &column);
+        fscanf(data, "%lf", &matrix[row-1][column-1]);
         // Can not read all three values at the same time!
-        fscanf(data, "%d %d", &row, &column);
-        fscanf(data, "%lf", &matrix(row - 1, column - 1));
-        matrix(column - 1, row - 1) = matrix(row - 1, column - 1);
     }
+
+    toSquare(nbasis, nbasis, matrix);
     fclose(data);
     return matrix;
 }
@@ -60,14 +81,24 @@ int getCompoundIndex(int i, int j, int k, int l){
     return ijkl;
 }
 
+Matrix convertToEigenMatrix(int row, int column, double** &matrix){
+    Matrix eigenMatrix(row, column);
+    for(int i = 0; i < row; i++){
+        for(int j = 0; j < column; j++){
+            eigenMatrix(i,j) = matrix[i][j];
+        }
+    }
+    return eigenMatrix;
+}
+
 Matrix computeDensity(int nbasis, int nElec, Matrix C){
     Matrix P(nbasis, nbasis);
     for(int sig = 0; sig < nbasis; sig++){
         for(int lam = 0; lam < nbasis; lam++){
-            P(sig, lam) = 0.000;
-            for (int i = 0; i < nElec/2 ; i++){
-                P(sig, lam) += C(sig, i) * C(lam, i);
-            }
+           P(sig, lam) = 0.000;
+           for (int i = 0; i < nElec/2 ; i++){
+               P(sig, lam) += C(sig, i) * C(lam, i);
+           }
         }
     }
     return P;
@@ -116,9 +147,6 @@ int main() {
     int nbasis = 7;
     int nElec = 10;
 
-/***********************************************************************
- * STO-3G Calculation for Water:
- ***********************************************************************/
 
 // -----------------------------------------
 //
@@ -137,14 +165,21 @@ int main() {
 //
 // -----------------------------------------
 
-    Matrix S = readOneEFile(nbasis, "s.dat");
-    Matrix T = readOneEFile(nbasis, "t.dat");
-    Matrix V = readOneEFile(nbasis, "v.dat");
+    double** S = getMatrixFromFile(nbasis, "s.dat");
+    double** T = getMatrixFromFile(nbasis, "t.dat");
+    double** V = getMatrixFromFile(nbasis, "v.dat");
+    print_matrix(nbasis, nbasis, V);
 
+    double **H_core = new double* [nbasis];
+    for(int i=0; i < nbasis; i++)
+        H_core[i] = new double[nbasis];
 
-    Matrix H_core = T+V;
-    cout << H_core;
-
+    for(int i = 0; i < nbasis; i++){
+        for(int j = 0; j < nbasis; j++){
+            H_core[i][j] = T[i][j] + V[i][j];
+        }
+    }
+    print_matrix(nbasis, nbasis, H_core);
 
 
 // -----------------------------------------
@@ -166,15 +201,24 @@ int main() {
     }
     fclose(eri_data);
 
+    //for (auto& t : ERI)
+    //    std::cout << t.first << " "
+    //              << t.second<< "\n";
+
+
 // -----------------------------------------
 //
 // Step 4: Build the Orthogonalization Matrix
 //
 // -----------------------------------------
 
+    // Since I don't know how to diagonalize a dynamically allocated 2D array
+    // I will just write a method to convert my 2D array into an Eigen Matrix
+    // Then I can call methods from the Eigen package to solve the problem
+    Matrix eS = convertToEigenMatrix(nbasis, nbasis, S);
 
     // Diagonalize S
-    Eigen::SelfAdjointEigenSolver<Matrix> diagS(S);
+    Eigen::SelfAdjointEigenSolver<Matrix> diagS(eS);
     Matrix L_S = diagS.eigenvectors();
     Matrix Sig_S = diagS.eigenvalues();
 
@@ -202,10 +246,10 @@ int main() {
 //
 // -----------------------------------------
 
-
+    Matrix eH_core = convertToEigenMatrix(nbasis, nbasis, H_core);
     // We form an initial (guess) Fock matrix in the orthonormal AO basis
     // using the core Hamiltonian as a guess:
-    Matrix F_prime = S_min_half.transpose() * H_core * S_min_half;
+    Matrix F_prime = S_min_half.transpose() * eH_core * S_min_half;
 
     // Diagonalize the fock matrix (F') to get the orthonormal C matrix (C') and
     // the energy matrix (epsilon_0)
@@ -227,7 +271,7 @@ int main() {
 
     // E can be computed from P, Hcore and F
     // In our first iteration, our fock matrix F is just Hcore
-    double elecE = computeElecEnergy(P, H_core, H_core, nbasis);
+    double elecE = computeElecEnergy(P, eH_core, eH_core, nbasis);
 
 // -----------------------------------------
 //
@@ -244,7 +288,7 @@ int main() {
     int nIter = 1;
 
     while (dE > dEthreshold || rmsP > rmsPthreshold){
-        printf("\nAfter %2u iteration, Total E(SCF) = %17.14f", nIter, curE);
+        cout << "After " << nIter << " iteration, Total E(SCF) = " << curE << endl;
 
         // Save the previous energy value to test for convergence
         double preE = curE;
@@ -253,7 +297,7 @@ int main() {
         // And also, we need the previous P to form a new Fock matrix
         Matrix preP = curP;
 
-        Matrix curF = formFock(H_core, preP, ERI, nbasis);
+        Matrix curF = formFock(eH_core, preP, ERI, nbasis);
 
         // Orthagonalize the new Fock matrix
         Matrix curFprime = S_min_half.transpose() * curF * S_min_half;
@@ -271,24 +315,15 @@ int main() {
 
         rmsP = computeDensityDifference(curP, preP, nbasis);
 
-        curE = Enuc + computeElecEnergy(curP, H_core, curF, nbasis);
+        curE = Enuc + computeElecEnergy(curP, eH_core, curF, nbasis);
 
         dE = curE - preE;
 
         nIter++;
     }
 
-    printf("\nSCF converged after %2d iteration, Final Total E(SCF) = %17.14f", nIter, curE);
+    cout << "SCF converged, the final total energy is : " << curE << endl;
 
-    cout << "" << endl;
-    cout << "" << endl;
-    Eigen::IOFormat CleanFmt(Eigen::FullPrecision);
-    cout << curP.format(CleanFmt) << endl;
-    cout << "" << endl;
-
-    Matrix FinalF = formFock(H_core, curP, ERI, nbasis);
-    cout << FinalF;
-    cout << "" << endl;
     return 0;
 }
 

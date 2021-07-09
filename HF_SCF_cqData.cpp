@@ -23,15 +23,10 @@ Matrix readOneEFile(int nbasis, const char *filename) {
 
     Matrix matrix(nbasis, nbasis);
 
-    int nline = nbasis * (nbasis + 1) / 2;
-    for (int i = 0; i < nline; i++) {
-        int row;
-        int column;
-
-        // Can not read all three values at the same time!
-        fscanf(data, "%d %d", &row, &column);
-        fscanf(data, "%lf", &matrix(row - 1, column - 1));
-        matrix(column - 1, row - 1) = matrix(row - 1, column - 1);
+    for (int i = 0; i < nbasis; i++) {
+        for (int j = 0; j < nbasis; j++) {
+        fscanf(data, "%lf", &matrix(i, j));
+        }
     }
     fclose(data);
     return matrix;
@@ -83,17 +78,15 @@ double computeElecEnergy(Matrix P, Matrix Hcore, Matrix F, int nbasis){
     return elecE;
 }
 
-Matrix formFock(Matrix Hcore, Matrix P, std::map<int, float> ERI, int nbasis) {
+Matrix formFock(Matrix Hcore, Matrix P, std::map<std::string, float> ERI, int nbasis) {
     Matrix F(nbasis, nbasis);
     for (int mu = 0; mu < nbasis; mu++) {
         for (int nu = 0; nu < nbasis; nu++) {
             F(mu, nu) = Hcore(mu, nu);
             for (int sig = 0; sig < nbasis; sig++) {
                 for (int lam = 0; lam < nbasis; lam++) {
-                    // Need to add one because these loop iterator are 0-indexed
-                    // The basis function #s listed in the file are 1-indexed
-                    int mu_nu_lam_sig = getCompoundIndex(mu + 1, nu + 1, lam + 1, sig + 1);
-                    int mu_lam_nu_sig = getCompoundIndex(mu + 1, lam + 1, nu + 1, sig + 1);
+                    int mu_nu_lam_sig = getCompoundIndex(mu, nu, lam, sig);
+                    int mu_lam_nu_sig = getCompoundIndex(mu, lam, nu, sig);
                     F(mu, nu) += P(sig, lam) * (2 * ERI[mu_nu_lam_sig] - ERI[mu_lam_nu_sig]);
                 }
             }
@@ -137,14 +130,26 @@ int main() {
 //
 // -----------------------------------------
 
-    Matrix S = readOneEFile(nbasis, "s.dat");
-    Matrix T = readOneEFile(nbasis, "t.dat");
-    Matrix V = readOneEFile(nbasis, "v.dat");
+    Matrix S = readOneEFile(nbasis, "cq_s.dat");
+    Matrix T = readOneEFile(nbasis, "cq_t.dat");
+    Matrix V = readOneEFile(nbasis, "cq_v.dat");
 
+    cout << "The overlap integral S: \n";
+    cout << S;
+    cout << "\n" <<endl;
 
+    cout << "The kinetic integral S: \n";
+    cout << T;
+    cout << "\n" <<endl;
+
+    cout << "The nuclear attraction integral V: \n";
+    cout << V;
+    cout << "\n" <<endl;
+
+    cout << "The core Hamiltonian H: \n";
     Matrix H_core = T+V;
     cout << H_core;
-
+    cout << "\n" <<endl;
 
 
 // -----------------------------------------
@@ -156,16 +161,19 @@ int main() {
     int i, j, k, l;
     double val;
 
-    std::map<int, float> ERI {};
+    std::map<std::string, float> ERI {};
 
     eri_data = fopen("eri.dat", "r");
     while(!feof(eri_data)) {
         fscanf(eri_data, "%d %d %d %d", &i, &j, &k, &l);
         fscanf(eri_data, "%lf",  &val);
-        ERI.insert({getCompoundIndex(i,j,k,l), val });
+        std::string index = to_string(i) + to_string(j) + to_string(k) + to_string(l);
+        ERI.insert({index, val });
     }
     fclose(eri_data);
 
+    for (auto& t : ERI)
+       std::cout << t.first << " " << t.second<< "\n";
 // -----------------------------------------
 //
 // Step 4: Build the Orthogonalization Matrix
@@ -280,15 +288,6 @@ int main() {
 
     printf("\nSCF converged after %2d iteration, Final Total E(SCF) = %17.14f", nIter, curE);
 
-    cout << "" << endl;
-    cout << "" << endl;
-    Eigen::IOFormat CleanFmt(Eigen::FullPrecision);
-    cout << curP.format(CleanFmt) << endl;
-    cout << "" << endl;
-
-    Matrix FinalF = formFock(H_core, curP, ERI, nbasis);
-    cout << FinalF;
-    cout << "" << endl;
     return 0;
 }
 

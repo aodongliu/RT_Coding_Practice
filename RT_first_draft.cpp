@@ -32,28 +32,8 @@ using std::ifstream;
 using namespace std;
 using namespace std::complex_literals;
 
-Matrix readOneEFile(int nbasis, const char *filename) {
-    FILE *data;
-    data = fopen(filename, "r");
-
-    Matrix matrix(nbasis, nbasis);
-
-    int nline = nbasis * (nbasis + 1) / 2;
-    for (int i = 0; i < nline; i++) {
-        int row;
-        int column;
-
-        // Can not read all three values at the same time!
-        fscanf(data, "%d %d", &row, &column);
-        fscanf(data, "%lf", &matrix(row - 1, column - 1));
-        matrix(column - 1, row - 1) = matrix(row - 1, column - 1);
-    }
-    fclose(data);
-    return matrix;
-}
-
 // Parse the one electron integrals files, and return a square matrix
-Matrix readMatrix(int nbasis, const char *filename) {
+Matrix readOneEFile(int nbasis, const char *filename) {
     FILE *data;
     data = fopen(filename, "r");
 
@@ -154,9 +134,9 @@ int main() {
     // 1.2 One-Electron Integrals
     // *****************
 
-    Matrix S = readOneEFile(nbasis, "s.dat");
-    Matrix T = readOneEFile(nbasis, "t.dat");
-    Matrix V = readOneEFile(nbasis, "v.dat");
+    Matrix S = readOneEFile(nbasis, "cq_s.dat");
+    Matrix T = readOneEFile(nbasis, "cq_t.dat");
+    Matrix V = readOneEFile(nbasis, "cq_v.dat");
 
     Matrix H_core = T+V;
 
@@ -195,9 +175,9 @@ int main() {
     // 1.4 Field-free Dipole Integrals
     // *****************
 
-    Matrix Dx = readMatrix(nbasis, "dipole_x.dat");
-    Matrix Dy = readMatrix(nbasis, "dipole_y.dat");
-    Matrix Dz = readMatrix(nbasis, "dipole_z.dat");
+    Matrix Dx = readOneEFile(nbasis, "dipole_x.dat");
+    Matrix Dy = readOneEFile(nbasis, "dipole_y.dat");
+    Matrix Dz = readOneEFile(nbasis, "dipole_z.dat");
 
     Matrix Dipole[3];
     Dipole[0] = Dx;
@@ -221,7 +201,7 @@ int main() {
     // 1.5 Ground-State Density
     // *****************
 
-    Matrix P0 = readMatrix(nbasis, "my_density.dat");
+    Matrix P0 = readOneEFile(nbasis, "my_density.dat");
     std::cout <<  "Ground-State Density:"<< "\n";
     cout << P0 << endl;
     cout << "" << endl;
@@ -252,8 +232,8 @@ int main() {
     // 2.2 Time step & Total time
     // *****************
 
-    double dt = 0.0005;
-    double totalTime = 0.015;
+    double dt = 0.05;
+    double totalTime = 15;
     double curTime = 0.00;
 
 
@@ -387,33 +367,27 @@ int main() {
     Matrix curP = P0;
     Matrix AO_F = F;
     Matrix preP;
-    Matrix AO_P = P0;
+    Matrix AO_P;
+    curE = computeElecEnergy(P0, H_core, AO_F, nbasis);
+    printf("\nAt t= %7.6f, the energy is %17.14f", curTime, curE);
+    curTime += dt;
 
     while (curTime < totalTime) {
-
-        // We first compute the energy. This requires us to use F and P in the AO basis
-        // When curTime is 0, AO_P is P0, which is in the AO basis
-        // When curTime is not 0, line 409 makes sure that we are using P in the AO basis
-        curE = computeElecEnergy(AO_P, H_core, AO_F, nbasis) + Enuc;
+        curE = computeElecEnergy(curP, H_core, AO_F, nbasis);
 
         printf("\nAt t= %7.6f, the energy is %17.14f", curTime, curE);
-
-        //Update:
 
         curTime += dt;
         preP = curP;
         curP = nextP;
 
-        // convert the curP (which is the density calculated at the end of the previous cycle)
-        // into AO basis
         AO_P = X * curP * X.adjoint();
-
         // Using the current density, we can get the
         // field-free Fock matrix F0 in the AO basis
         AO_F = formFock(H_core, AO_P, ERI, nbasis);
 
-        // To add the field, we are supposed to do: F = F0 + d * e
-        // However, we are using a delta pulse, electric field is turned off
+        // We are supposed to do: F = F0 + d * e
+        // However, we are using a delta pulse. Electric field is turned off
         // after the first time step. Thus F = F0
 
         // Orthagonalize F, convert it into OAO basis
@@ -440,18 +414,7 @@ int main() {
         U = C * e_i_2dt_epsilon * C.adjoint();
 
         // Equation to use: P(t_(i+1)) = U P_0(t_(i-1)) U^dagger
-
-        // This if condition is needed because we are propagating P using the OAO basis
-        // When curTime == dt, we are at the first time step, and our preP is P0
-        // P0 is in the AO basis, so we need to transform it to OAO basis before propagating
-        // For all other time steps, preP is already in the OAO basis
-        if (curTime == dt){
-            Matrix OAO_preP = X_inverse * preP * X_inverse.adjoint();
-            nextP = U * OAO_preP * U.adjoint();
-        }else{
-            nextP = U * preP * U.adjoint();
-        }
-
+        nextP = U * preP * U.adjoint();
     }
     return 0;
 
